@@ -422,7 +422,7 @@
                             <td style="font-size:.8rem;color:var(--accent)">{{ b.gst_found or '—' }}</td>
                             <td style="font-size:.8rem;color:var(--muted)">{{ b.bill_book_id or '—' }}</td>
                             <td><span class="verdict-pill pill-{{ b.verdict }}">{{ b.verdict }}</span></td>
-                            <td>{{ "%.3f"|format(b.fraud_score) }}</td>
+                            <td>{{ "%.3f"|format(b.fraud_score|float) }}</td>
                             <td>{{ b.ocr_confidence }}</td>
                             <td style="color:var(--muted)">{{ b.time_taken_sec }}s</td>
                         </tr>
@@ -442,7 +442,7 @@
     </div>
 
     <script>
-        const overTime = {{ over_time_json | safe }};
+        const overTime = JSON.parse('{{ over_time_json | safe }}');
 
         // Bills Over Time chart
         const billsCtx = document.getElementById('billsChart').getContext('2d');
@@ -463,16 +463,31 @@
 
         // Verdict donut
         const vCtx = document.getElementById('verdictChart').getContext('2d');
+        const genuineCnt = Number('{{ stats.genuine_count | default(0) }}');
+        const suspCnt = Number('{{ stats.suspicious_count | default(0) }}');
+        const fraudCnt = Number('{{ stats.fraud_count | default(0) }}');
+        
         new Chart(vCtx, {
             type: 'doughnut',
             data: {
                 labels: ['Genuine', 'Suspicious', 'Fraud'],
-                datasets: [{ data: [{{ stats.genuine_count }}, {{ stats.suspicious_count }},{{ stats.fraud_count }}],
-            backgroundColor: ['rgba(63,185,80,.7)', 'rgba(210,153,34,.7)', 'rgba(248,81,73,.7)'],
-            borderColor: ['#3fb950', '#d29922', '#f85149'], borderWidth: 2}]
-  },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#8b949e' } } } }
-});
+                datasets: [{ 
+                    data: [genuineCnt, suspCnt, fraudCnt],
+                    backgroundColor: ['rgba(63,185,80,.7)', 'rgba(210,153,34,.7)', 'rgba(248,81,73,.7)'],
+                    borderColor: ['#3fb950', '#d29922', '#f85149'], 
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: { color: '#8b949e' }
+                    }
+                }
+            }
+        });
     </script>
 </body>
 

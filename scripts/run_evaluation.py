@@ -39,7 +39,7 @@ from utils.vendor_db            import lookup_vendor_by_gst, get_dashboard_stats
 
 REPORTS_DIR = BASE_DIR / 'reports'
 REPORTS_DIR.mkdir(exist_ok=True)
-TEST_DIR = BASE_DIR / 'dataset' / 'test'
+TEST_DIR = BASE_DIR / 'Main_Dataset' / 'test'
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 print()

@@ -143,7 +143,6 @@
 
 <div class="hero">
   <h1>AI Financial Document Fraud Detection</h1>
-  <p>4-stream forensic analysis — Visual · Triple OCR · Semantic · Vendor-Aware</p>
 </div>
 
 <!-- Flash messages -->
@@ -213,8 +212,8 @@
     <div class="ocr-card {{ card_cls }}">
       <h4>{{ eng_name }}</h4>
       {% if has_err %}
-        <div class="ocr-field"><span class="label">Status</span><span class="val" style="color:var(--red)">Error</span></div>
-        <span class="agree-badge badge-error">⚠ Failed</span>
+        <div class="ocr-field"><span class="label">Status</span><span class="val" style="color:var(--muted)">Unavailable</span></div>
+        <span class="agree-badge" style="background: rgba(139,148,158,.1); color: var(--muted)">ℹ️ Offline</span>
       {% else %}
         <div class="ocr-field"><span class="label">Net</span><span class="val">{{ eng_data.net_subtotal or '—' }}</span></div>
         <div class="ocr-field"><span class="label">VAT %</span><span class="val">{{ eng_data.vat_percent or '—' }}</span></div>

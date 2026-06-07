@@ -5,10 +5,18 @@ Tesseract + EasyOCR + PaddleOCR — parallel execution, majority-vote entities
 """
 
 import re
+import os
 import cv2
 import numpy as np
 import concurrent.futures
+import pytesseract
 from pathlib import Path
+
+# Explicit Tesseract path for Windows
+tess_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+if os.path.exists(tess_path):
+    pytesseract.tesseract_cmd = tess_path
+    pytesseract.pytesseract.tesseract_cmd = tess_path
 
 # ── Entity extraction helpers ────────────────────────────────────────────────
 
@@ -16,18 +24,46 @@ from pathlib import Path
 GST_PATTERN_INDIAN  = re.compile(
     r'\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b'
 )
-# Generic Tax-ID: US/CORD-style  XX-XX-XXXX
-GST_PATTERN_GENERIC = re.compile(r'\b\d{3}-\d{2}-\d{4}\b|\b\d{2}-\d{2}-\d{4}\b')
+# Generic Tax-ID: US/CORD-style. Exclude dates (XX-XX-XXXX)
+GST_PATTERN_GENERIC = re.compile(r'\b(?!\d{2}-\d{2}-\d{4})\d{2,4}-\d{2,4}-\d{4,6}\b')
 # Invoice/Bill number
 INVOICE_PATTERN     = re.compile(r'(?:Invoice|Bill|Receipt|No\.?|#)\s*[:\-]?\s*([A-Z0-9\-/]+)', re.IGNORECASE)
-# Single decimal numbers
-DECIMAL_PATTERN     = re.compile(r'\b\d{1,8}[.,]\d{2}\b')
+# Broad decimal pattern: handle spaces like '3 0 . 0 0'
+DECIMAL_PATTERN     = re.compile(r'\d{1,8}\s*[.,]\s*\d{2}')
 
 
 def _normalise(text: str) -> str:
     """Remove spaces and normalise commas→dots for number parsing."""
+    # Remove interior spaces between digits that confuse patterns
+    text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
+    text = re.sub(r'(\d)\s+([.,])', r'\1\2', text)
+    text = re.sub(r'([.,])\s+(\d)', r'\1\2', text)
     text = text.replace(',', '.')
     return text
+
+
+def _preprocess_for_ocr(image_path: str):
+    """Enhance image for OCR: Grayscale + Otsu Threshold + Closing."""
+    img = cv2.imread(image_path)
+    if img is None: return None
+    
+    # 1. Grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # 2. Rescale (Upsample 2x)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+    
+    # 3. Otsu's Binarization (Better for clean backgrounds than Adaptive)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 4. Morphological closing (Heal broken/dotted characters like '8')
+    kernel = np.ones((2,2), np.uint8)
+    processed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    # Save temp for OCR
+    temp_path = str(Path(image_path).parent / f"pre_{Path(image_path).name}")
+    cv2.imwrite(temp_path, processed)
+    return temp_path
 
 
 def _extract_entities_from_text(raw_text: str) -> dict:
@@ -61,26 +97,54 @@ def _extract_entities_from_text(raw_text: str) -> dict:
     if vp:
         vat_percent = float(vp.group(1))
 
-    # Try to find the SUMMARY block
-    summary_start = norm.upper().find("SUMMARY")
-    if summary_start == -1:
-        summary_start = norm.upper().find("TOTAL")
+    lines = norm.split('\n')
+    found_totals = []
+    
+    for line in lines:
+        line_upper = line.upper()
+        # Avoid picking up Qty or Pax as financial totals
+        if "QTY" in line_upper or "PAX" in line_upper or "PCS" in line_upper:
+            continue
+            
+        nums = DECIMAL_PATTERN.findall(line)
+        nums = [float(n.replace(',', '.')) for n in nums]
+        if not nums: continue
 
-    if summary_start != -1:
-        summary = norm[summary_start:]
-        # Find all decimals in summary lines
-        lines = summary.split('\n')
-        for line in lines:
-            if re.search(r'total', line, re.IGNORECASE):
-                nums = DECIMAL_PATTERN.findall(line)
-                nums = [float(n.replace(',', '.')) for n in nums]
-                if len(nums) >= 3:
-                    net_subtotal = nums[0]
-                    vat_amount   = nums[1]
-                    gross_total  = nums[2]
-                    break
-                elif len(nums) == 1:
-                    gross_total  = nums[0]
+        # 1. Broad "Total" capture
+        if any(kw in line_upper for kw in ["TOTAL", "GROSS", "GRAND", "NET", "SUBTOTAL", "SUB-TOTAL", "INCLUSIVE", "EXCLUDING", "AMOUNT"]):
+            found_totals.append(nums[-1])
+            
+            # Special case: line with 3+ numbers (Net, VAT, Total)
+            if len(nums) >= 3 and ("TOTAL" in line_upper or "SUMMARY" in line_upper):
+                net_subtotal = nums[-3]
+                vat_amount   = nums[-2]
+                gross_total  = nums[-1]
+
+            # Contextual hints
+            if any(kw in line_upper for kw in ["NET", "SUBTOTAL", "EXCLUDING"]):
+                if net_subtotal is None: net_subtotal = nums[-1]
+            if any(kw in line_upper for kw in ["VAT", "GST", "TAX", "SERVICE"]):
+                if vat_amount is None: vat_amount = nums[-1]
+
+    if found_totals:
+        # Final gross is the last "total-like" value on the page
+        if gross_total is None:
+            gross_total = found_totals[-1]
+        
+        # If we have multiple different totals, that's a conflict
+        found_gross_totals = found_totals
+    
+    # Fallback if no TOTAL block found (for cropped receipts)
+    if gross_total is None:
+        all_nums = DECIMAL_PATTERN.findall(norm)
+        all_nums = [float(n.replace(',', '.')) for n in all_nums]
+        if all_nums:
+            # Assume the largest extracted decimal number is the Gross Total
+            gross_total = max(all_nums)
+            net_subtotal = gross_total # Default to 0 VAT
+            if vat_percent and vat_percent > 0:
+                net_subtotal = round(gross_total / (1 + vat_percent/100), 2)
+                vat_amount = round(gross_total - net_subtotal, 2)
 
     return {
         "net_subtotal": net_subtotal,
@@ -89,23 +153,11 @@ def _extract_entities_from_text(raw_text: str) -> dict:
         "gross_total":  gross_total,
         "gst_number":   gst,
         "invoice_number": invoice,
+        "conflicting_totals": list(set(found_gross_totals)) if len(set(found_gross_totals)) > 1 else [],
     }
 
 
 # ── OCR Engines ─────────────────────────────────────────────────────────────
-
-def _run_tesseract(image_path: str) -> dict:
-    try:
-        import pytesseract
-        from PIL import Image as PILImage
-        img   = PILImage.open(image_path)
-        text  = pytesseract.image_to_string(img)
-        entities = _extract_entities_from_text(text)
-        entities["engine"] = "tesseract"
-        entities["raw_text"] = text
-        return entities
-    except Exception as e:
-        return {"engine": "tesseract", "error": str(e), "raw_text": ""}
 
 
 # ── Global Singletons for OCR Models (Lazy Loading) ─────────────────────────
@@ -122,14 +174,18 @@ def _get_easyocr():
 def _get_paddleocr():
     global _PADDLE_OCR
     if _PADDLE_OCR is None:
-        import sys
-        # PaddleOCR tries to parse sys.argv on init, which can crash in Flask/Subagent
+        import sys, os
+        # Correct flag to skip Baidu connectivity check in paddlex (used by PaddleOCR v3.4+)
+        os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+        # PaddleOCR tries to parse sys.argv on init, which can crash in Flask
         _old_argv = sys.argv
         sys.argv = [sys.argv[0]]
         try:
             from paddleocr import PaddleOCR
-            # removed show_log=False as it causes __init__ error in this version
             _PADDLE_OCR = PaddleOCR(use_angle_cls=True, lang='en')
+        except Exception as e:
+            _PADDLE_OCR = "FAILED"
+            print(f"[FORENSIQ] PaddleOCR init failed: {e}")
         finally:
             sys.argv = _old_argv
     return _PADDLE_OCR
@@ -137,7 +193,6 @@ def _get_paddleocr():
 
 def _run_tesseract(image_path: str) -> dict:
     try:
-        import pytesseract
         from PIL import Image as PILImage
         img   = PILImage.open(image_path)
         text  = pytesseract.image_to_string(img)
@@ -165,6 +220,10 @@ def _run_easyocr(image_path: str) -> dict:
 def _run_paddleocr(image_path: str) -> dict:
     try:
         ocr = _get_paddleocr()
+        if ocr == "FAILED":
+            return {"engine": "paddleocr",
+                    "error": "PaddleOCR unavailable (model init failed — offline mode)",
+                    "raw_text": ""}
         result = ocr.ocr(image_path, cls=True)
         lines = []
         if result and result[0]:
@@ -268,16 +327,30 @@ def run_triple_ocr(image_path: str) -> dict:
             }
         }
     """
+    # PRE-INIT EASYOCR to avoid PyTorch threading deadlocks on Windows
+    try:
+        _get_easyocr()
+    except Exception as e:
+        print(f"[FORENSIQ] Pre-init EasyOCR failed: {e}")
+
+    # 0. Pre-process image for better contrast/clarity
+    processed_path = _preprocess_for_ocr(image_path) or image_path
+
     # Run all 3 engines in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
-            "tesseract": executor.submit(_run_tesseract, image_path),
-            "easyocr":   executor.submit(_run_easyocr,   image_path),
-            "paddleocr": executor.submit(_run_paddleocr,  image_path),
+            "tesseract": executor.submit(_run_tesseract, processed_path),
+            "easyocr":   executor.submit(_run_easyocr,   processed_path),
+            "paddleocr": executor.submit(_run_paddleocr,  processed_path),
         }
         engine_results = {name: f.result() for name, f in futures.items()}
 
-    results_list = list(engine_results.values())
+    # Cleanup temp file
+    if processed_path != image_path and Path(processed_path).exists():
+        try: os.remove(processed_path)
+        except: pass
+
+    results_list = [r for r in engine_results.values() if not r.get("error")]
 
     # Majority vote on each field
     fields = ["net_subtotal", "vat_percent", "vat_amount", "gross_total",
@@ -290,6 +363,17 @@ def run_triple_ocr(image_path: str) -> dict:
     # Agreement level
     agreement, confidence = _compute_agreement(results_list)
 
+    # Aggregated conflicting totals (any engine finding a conflict is suspicious)
+    conflicting = []
+    for r in results_list:
+        conflicting.extend(r.get("conflicting_totals", []))
+    conflicting = sorted(list(set(conflicting)))
+
+    # SYSTEM FAILURE check: If no engine succeeded or all returned empty text
+    system_failure = False
+    if not results_list or all(not r.get("raw_text", "").strip() for r in results_list):
+        system_failure = True
+
     return {
         "net_subtotal":   merged.get("net_subtotal"),
         "vat_percent":    merged.get("vat_percent"),
@@ -299,5 +383,7 @@ def run_triple_ocr(image_path: str) -> dict:
         "invoice_number": merged.get("invoice_number") or "",
         "agreement":      agreement,
         "ocr_confidence": confidence,
+        "conflicting_totals": conflicting,
+        "system_failure": system_failure,
         "engine_results": engine_results,   # individual engine outputs for UI cards
     }

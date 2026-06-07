@@ -1,0 +1,12 @@
+flask
+opencv-python
+numpy
+Pillow
+tensorflow
+pytesseract
+easyocr
+paddleocr
+paddlepaddle
+scikit-learn
+matplotlib
+seaborn

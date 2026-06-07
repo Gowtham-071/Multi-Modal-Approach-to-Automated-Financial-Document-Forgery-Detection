@@ -196,6 +196,10 @@
             width: 100%;
             border-collapse: collapse;
             font-size: .85rem;
+            background: var(--surface);
+            color: var(--text);
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         thead th {
@@ -215,6 +219,10 @@
 
         tbody tr:last-child td {
             border-bottom: none;
+        }
+
+        tbody tr {
+            background: transparent;
         }
 
         tbody tr:hover {
@@ -355,35 +363,35 @@
                 <tbody>
                     <tr>
                         <td>Visual-only (5 detectors + CNN)</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
                     </tr>
                     <tr>
                         <td>OCR-only (Triple consensus)</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
                     </tr>
                     <tr>
                         <td>Visual + OCR (no vendor context)</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
                     </tr>
                     <tr>
                         <td>Visual + OCR + Semantic Gate</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
-                        <td>—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
+                        <td style="color:var(--muted);">—</td>
                     </tr>
                     <tr class="highlight-row">
                         <td>✅ Full FORENSIQ (all streams)</td>
@@ -418,9 +426,9 @@
                     {% for cls, m in stats.class_report.items() %}
                     <tr>
                         <td>{{ cls }}</td>
-                        <td>{{ "%.3f"|format(m.precision) }}</td>
-                        <td>{{ "%.3f"|format(m.recall) }}</td>
-                        <td>{{ "%.3f"|format(m['f1-score']) }}</td>
+                        <td>{{ "%.3f"|format(m.precision|float) }}</td>
+                        <td>{{ "%.3f"|format(m.recall|float) }}</td>
+                        <td>{{ "%.3f"|format(m['f1-score']|float) }}</td>
                         <td>{{ m.support }}</td>
                     </tr>
                     {% endfor %}

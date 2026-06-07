@@ -64,7 +64,7 @@ def _ela_score(image_path: str, quality: int = 90) -> tuple:
     ela_colored = cv2.applyColorMap(ela_gray, cv2.COLORMAP_JET)
     cv2.imwrite(heatmap_path, ela_colored)
 
-    return round(min(score * 2.0, 1.0), 4), heatmap_path  # scale up, cap at 1
+    return round(min(score * 3.0, 1.0), 4), heatmap_path  # Increased sensitivity (3.0x multiplier)
 
 
 # ── 2. Noise Inconsistency ──────────────────────────────────────────────────
@@ -89,7 +89,8 @@ def _noise_score(image_path: str, block_size: int = 64) -> float:
 
     # High variance in per-block noise = inconsistency = tampering
     global_std = float(np.std(stds))
-    score = min(global_std / 8.0, 1.0)
+    # Use 30.0 as divisor (8.0 was too low, causing all docs to cap at 1.0)
+    score = min(global_std / 30.0, 1.0)
     return round(score, 4)
 
 
@@ -225,15 +226,15 @@ def run_visual_forensics(image_path: str) -> dict:
     gray = load_image_gray(image_path)
     quality = _compute_quality_score(gray)
 
-    # Weighted composite visual score
-    # Weights: ELA=0.25, CNN=0.25, Noise=0.15, JPEG=0.15, CopyPaste=0.10, Edge=0.10
+    # Weights: CNN=0.50, ELA=0.30, Noise=0.10, JPEG=0.06, CopyPaste=0.02, Edge=0.02
+    # CNN was trained on this specific dataset — make it the primary discriminator
     composite = (
-        0.25 * ela +
-        0.25 * cnn +
-        0.15 * noise +
-        0.15 * jpeg +
-        0.10 * copypaste +
-        0.10 * edge
+        0.50 * cnn +
+        0.30 * ela +
+        0.10 * noise +
+        0.06 * jpeg +
+        0.02 * copypaste +
+        0.02 * edge
     )
 
     return {

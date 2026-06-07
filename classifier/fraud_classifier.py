@@ -55,8 +55,13 @@ def arithmetic_semantic_gate(net_subtotal, vat_percent, vat_amount,
     reasons = []
     failures = 0
 
-    if None in (net_subtotal, vat_amount, gross_total):
-        return False, 0.5, ["Incomplete financial fields — cannot verify arithmetic"]
+    if None in (net_subtotal, gross_total):
+        # Missing fields = we simply cannot verify, NOT evidence of fraud
+        return True, 0.0, ["ℹ️ Financial fields not fully extracted — arithmetic check skipped (neutral)"]
+
+    if vat_amount is None:
+        vat_amount = 0.0
+        reasons.append("ℹ️ VAT/Tax amount not found — assuming 0.00 for check")
 
     # Check 1: Total = Net + VAT_amount
     computed_total = round(net_subtotal + vat_amount, 2)
@@ -115,8 +120,9 @@ def adaptive_fusion(
         w_visual, w_text = 0.45, 0.55
         evidence.append(f"Low image quality ({quality:.2f}) → increased OCR weight")
     else:
-        w_visual, w_text = 0.68, 0.32
-        evidence.append(f"Good image quality ({quality:.2f}) → standard visual/OCR weights")
+        # Increase visual weight slightly to favor forensic signals (IEEE Contribution 3)
+        w_visual, w_text = 0.75, 0.25
+        evidence.append(f"Good image quality ({quality:.2f}) → prioritized visual forensics")
 
     # ── B. Visual score ──
     S_visual = visual_result.get("composite_visual_score", 0.5)
@@ -142,6 +148,13 @@ def adaptive_fusion(
         net, vat_pct, vat_amt, gross
     )
     reasons.extend(gate_reasons)
+
+    # Check for internal total conflicts (e.g., 'Total 38.00' vs 'TOTAL 30.00')
+    conflicting_totals = ocr_result.get("conflicting_totals", [])
+    if len(conflicting_totals) > 1:
+        gate_score = max(gate_score, 0.8)
+        evidence.append(f"❌ Internal conflict: Multiple different values found for 'TOTAL' {conflicting_totals}")
+        reasons.append(f"Multiple conflicting 'Total' fields detected: {conflicting_totals}")
 
     # OCR confidence as a text-fraud signal (low confidence = more suspicious)
     S_text = gate_score * 0.7 + (1 - ocr_conf) * 0.3
@@ -185,20 +198,29 @@ def adaptive_fusion(
     # ── F. Hard gate override ──
     hard_overridden = False
     if not gate_passed:
+        # Only force high score if arithmetic actually FAILED (not just missing)
         S_final = max(S_final, 0.75)
-        evidence.append("⛔ Arithmetic gate FAILED — score forced ≥ 0.75")
+        evidence.append("⛔ Arithmetic gate FAILED — numbers don't add up — score forced ≥ 0.75")
         hard_overridden = True
 
+    # System Failure Override: If OCR could not read the document at all
+    if ocr_result.get("system_failure"):
+        # An unreadable bill is a major security risk for seminar demos.
+        # If OCR fails entirely, force suspicion to FRAUD levels.
+        S_final = max(S_final, 0.70)
+        evidence.append("⛔ System Failure: OCR engines (Tesseract/Easy/Paddle) failed — marking as FRAUD")
+
     if not gst_valid and not vendor_match:
-        S_final = max(S_final, 0.50)
-        evidence.append("⚠️ Invalid GST format and not enrolled — score forced ≥ 0.50")
+        # Mild nudge only — missing GST is common for non-Indian receipts
+        S_final = min(S_final + 0.05, 1.0)
+        evidence.append("⚠️ No valid GST/Tax-ID found — slight score nudge +0.05")
 
     # ── G. Clamp and verdict ──
     S_final = round(max(0.0, min(1.0, S_final)), 4)
 
-    if S_final < 0.35:
+    if S_final < 0.45:
         verdict = "GENUINE"
-    elif S_final <= 0.65:
+    elif S_final <= 0.60:
         verdict = "SUSPICIOUS"
     else:
         verdict = "FRAUD"
